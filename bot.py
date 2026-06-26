@@ -231,7 +231,7 @@ def send_social_submenu(chat_id):
     )
 
 # Helper: Upload Single File
-def upload_single_file(chat_id, file_path, reply_to_id, caption=""):
+def upload_single_file(chat_id, file_path, reply_to_id=None, caption=""):
     file_size = os.path.getsize(file_path)
     if file_size > 50 * 1024 * 1024:
         bot.send_message(chat_id, f"File <code>{escape_html(os.path.basename(file_path))}</code> exceeds Telegram's 50MB limit ({file_size // (1024*1024)}MB) and cannot be sent.", reply_to_message_id=reply_to_id, parse_mode="HTML")
@@ -262,41 +262,119 @@ def upload_single_file(chat_id, file_path, reply_to_id, caption=""):
 # Helper: Watch directory in real-time and upload newly completed files
 def monitor_and_upload_realtime(temp_dir, process, chat_id, reply_to_id, silent=False):
     uploaded = set()
-    
+    buffer = []
+    last_added_time = time.time()
+
+    def flush_buffer():
+        if not buffer:
+            return
+        if silent:
+            buffer.clear()
+            return
+        
+        # Group files in the buffer into chunks of at most 10 (Telegram's limit)
+        chunks = [buffer[i:i + 10] for i in range(0, len(buffer), 10)]
+        for chunk in chunks:
+            if len(chunk) == 1:
+                # Send single file directly without reply headers
+                upload_single_file(chat_id, chunk[0], None)
+            else:
+                # Send media group (album) directly without reply headers
+                try:
+                    media_group = []
+                    open_files = []
+                    for file_path in chunk:
+                        ext = os.path.splitext(file_path)[1].lower()
+                        if ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm", ".m4v"]:
+                            f = open(file_path, "rb")
+                            open_files.append(f)
+                            caption_text = ""
+                            if len(media_group) == 0:
+                                # Add platform/profile tag to the first media item caption
+                                parts = file_path.replace("\\", "/").split("/")
+                                if len(parts) >= 3:
+                                    platform = parts[-3]
+                                    username = parts[-2]
+                                    caption_text = f"<b>{platform.upper()}</b>: <code>@{username}</code>"
+                            
+                            if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                                media_group.append(telebot.types.InputMediaPhoto(f, caption=caption_text, parse_mode="HTML"))
+                            else:
+                                media_group.append(telebot.types.InputMediaVideo(f, caption=caption_text, parse_mode="HTML"))
+                        else:
+                            # Send document separately
+                            upload_single_file(chat_id, file_path, None)
+                    
+                    if media_group:
+                        bot.send_media_group(chat_id, media_group)
+                    for f in open_files:
+                        try: f.close()
+                        except: pass
+                except Exception as e:
+                    logger.error(f"Failed sending media group: {e}. Falling back to uploading individually...")
+                    for f in open_files:
+                        try: f.close()
+                        except: pass
+                    # Fallback to individual upload without replies
+                    for file_path in chunk:
+                        upload_single_file(chat_id, file_path, None)
+        
+        buffer.clear()
+
     while process.poll() is None:
+        new_files_stabilized = []
         if not silent:
             for root, _, files in os.walk(temp_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
-                    if file_path in uploaded or file == "archive.txt":
+                    # Ignore directory archives and temporary files
+                    if file_path in uploaded or file == "archive.txt" or file.endswith(".part") or file.endswith(".temp") or file.endswith(".ytdl") or file.endswith(".tmp"):
                         continue
                     
                     try:
                         size_before = os.path.getsize(file_path)
                         if size_before == 0:
                             continue
-                        time.sleep(0.8)
+                        time.sleep(0.5)
                         size_after = os.path.getsize(file_path)
                         if size_before == size_after:
-                            upload_single_file(chat_id, file_path, reply_to_id)
+                            new_files_stabilized.append(file_path)
                             uploaded.add(file_path)
                     except Exception as e:
                         logger.error(f"Error checking file for real-time upload: {e}")
+        
+        if new_files_stabilized:
+            buffer.extend(new_files_stabilized)
+            last_added_time = time.time()
+        
+        # If the buffer has 10 or more items, flush immediately
+        if len(buffer) >= 10:
+            flush_buffer()
+        # Or if 2.0 seconds have passed since the last file was added, flush the buffer
+        elif buffer and (time.time() - last_added_time > 2.0):
+            flush_buffer()
+            
         time.sleep(0.5)
         
+    # Final sweep to upload any remaining files
     if not silent:
+        new_files_stabilized = []
         for root, _, files in os.walk(temp_dir):
             for file in files:
                 file_path = os.path.join(root, file)
-                if file_path in uploaded or file == "archive.txt":
+                if file_path in uploaded or file == "archive.txt" or file.endswith(".part") or file.endswith(".temp") or file.endswith(".ytdl") or file.endswith(".tmp"):
                     continue
                 try:
                     if os.path.getsize(file_path) > 0:
-                        upload_single_file(chat_id, file_path, reply_to_id)
+                        new_files_stabilized.append(file_path)
                         uploaded.add(file_path)
                 except Exception as e:
                     logger.error(f"Error in final upload sweep: {e}")
-                    
+        if new_files_stabilized:
+            buffer.extend(new_files_stabilized)
+        
+        flush_buffer()
+        
     return len(uploaded)
 
 # Core Logic: Sherlock
@@ -546,6 +624,7 @@ def run_download_logic(message, url, silent=False):
                 logger.info("Cleaned up temporary download directory.")
             except Exception as e:
                 logger.error(f"Failed to delete temp dir: {e}")
+        send_social_submenu(message.chat.id)
 
 # Core Logic: Add Profile to Batch List
 def run_add_profile_logic(message, target, platform_key, display_name, filename):
@@ -743,6 +822,7 @@ def run_batch_download_logic(message, silent=False):
 
     final_text = "\n".join(status_parts)
     bot.edit_message_text(final_text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
+    send_social_submenu(message.chat.id)
 
 # Document Handler: Securely upload cookie files directly through chat
 @bot.message_handler(content_types=['document'])
@@ -842,10 +922,14 @@ def handle_menu_click(call):
         )
         bot.send_message(chat_id, "Downloader: Select transfer mode:", reply_markup=markup, parse_mode="HTML")
     elif action == "dl_mode_send":
+        try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+        except: pass
         USER_STATES[chat_id] = "awaiting_download"
         USER_PARAMS[chat_id] = {"silent": False}
         bot.send_message(chat_id, "Downloader: Please enter the social media post URL to download and send:")
     elif action == "dl_mode_silent":
+        try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+        except: pass
         USER_STATES[chat_id] = "awaiting_download"
         USER_PARAMS[chat_id] = {"silent": True}
         bot.send_message(chat_id, "Downloader: Please enter the social media post URL to archive silently on the server:")
@@ -870,8 +954,12 @@ def handle_menu_click(call):
         )
         bot.send_message(chat_id, "Batch Downloader: Select transfer mode:", reply_markup=markup, parse_mode="HTML")
     elif action == "batch_mode_send":
+        try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+        except: pass
         run_batch_download_logic(call.message, silent=False)
     elif action == "batch_mode_silent":
+        try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+        except: pass
         run_batch_download_logic(call.message, silent=True)
         
     elif action == "social_back":
