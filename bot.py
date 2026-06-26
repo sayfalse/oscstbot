@@ -640,11 +640,6 @@ def run_batch_download_logic(message, silent=False):
             os.makedirs(dest_dir, exist_ok=True)
             cookie_path = get_cookies_arg(platform)
 
-            # Check if cookies are missing
-            if platform in ["instagram", "facebook"] and not cookie_path:
-                failed_profiles.append(f"{platform}/{username} (No session cookies configured)")
-                continue
-
             profile_success = False
 
             # Photos
@@ -688,7 +683,10 @@ def run_batch_download_logic(message, silent=False):
                     profile_success = True
 
             if not profile_success and new_photos == 0 and new_vids == 0:
-                failed_profiles.append(f"{platform}/{username} (Engine error / rate limit / check connection)")
+                if platform in ["instagram", "facebook"] and not cookie_path:
+                    failed_profiles.append(f"{platform}/{username} (Failed - try adding cookies if public download fails)")
+                else:
+                    failed_profiles.append(f"{platform}/{username} (Engine error / rate limit / check connection)")
 
     # Format status text as HTML
     status_parts = []
