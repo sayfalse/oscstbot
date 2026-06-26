@@ -490,30 +490,49 @@ def run_download_logic(message, url, silent=False):
         cookie_path = get_cookies_arg(platform)
         download_success = False
         
+        stderr_g = ""
         if platform != "generic":
             cmd_gdl = ["gallery-dl", "-D", dest_dir]
             if cookie_path: cmd_gdl += ["--cookies", cookie_path]
             elif platform == "tiktok": cmd_gdl += ["--cookies-from-browser", "chrome"]
             cmd_gdl += ["-o", f"user-agent={UA}", "--sleep-request", "5", url]
             
-            process = subprocess.Popen(cmd_gdl, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            uploaded_count = monitor_and_upload_realtime(dest_dir, process, message.chat.id, message.message_id, silent)
-            if process.poll() == 0 or uploaded_count > 0:
+            process_g = subprocess.Popen(cmd_gdl, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
+            uploaded_count = monitor_and_upload_realtime(dest_dir, process_g, message.chat.id, message.message_id, silent)
+            _, stderr_g = process_g.communicate()
+            if process_g.poll() == 0 or uploaded_count > 0:
                 download_success = True
+            else:
+                if stderr_g:
+                    logger.warning(f"gallery-dl single download failed: {stderr_g.strip()}")
 
+        stderr_y = ""
         if not download_success:
             cmd_ytd = ["yt-dlp", "-o", os.path.join(dest_dir, "%(title)s.%(ext)s"), "--no-playlist"]
             if cookie_path: cmd_ytd += ["--cookies", cookie_path]
             elif platform == "tiktok": cmd_ytd += ["--cookies-from-browser", "chrome"]
             cmd_ytd += ["--user-agent", UA, url]
             
-            process = subprocess.Popen(cmd_ytd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            uploaded_count = monitor_and_upload_realtime(dest_dir, process, message.chat.id, message.message_id, silent)
-            if process.poll() == 0 or uploaded_count > 0:
+            process_y = subprocess.Popen(cmd_ytd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
+            uploaded_count = monitor_and_upload_realtime(dest_dir, process_y, message.chat.id, message.message_id, silent)
+            _, stderr_y = process_y.communicate()
+            if process_y.poll() == 0 or uploaded_count > 0:
                 download_success = True
+            else:
+                if stderr_y:
+                    logger.warning(f"yt-dlp single download failed: {stderr_y.strip()}")
 
         if not download_success:
-            bot.edit_message_text("Error: Failed to download media. The link may be private, expired, or unsupported. Make sure your session cookies are configured.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
+            combined_err = (stderr_g if platform != "generic" else "") + "\n" + (stderr_y or "")
+            err_reason = "The link may be private, expired, or unsupported."
+            if "401" in combined_err or "unauthorized" in combined_err.lower() or "login" in combined_err.lower():
+                err_reason = "Login required or blocked by the platform. Datacenter IP addresses require session cookies to bypass blocks."
+            elif "429" in combined_err or "rate limit" in combined_err.lower() or "too many requests" in combined_err.lower():
+                err_reason = "Rate limited by the platform."
+            elif "private" in combined_err.lower():
+                err_reason = "This post/profile is private. Session cookies are required."
+                
+            bot.edit_message_text(f"Error: Failed to download media. {err_reason}", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             return
 
         if silent:
@@ -650,11 +669,15 @@ def run_batch_download_logic(message, silent=False):
             if cookie_path: cmd_photos += ["--cookies", cookie_path]
             cmd_photos += ["-o", f"user-agent={UA}", "--download-archive", archive_path, "--sleep-request", "5", line]
             
-            process_p = subprocess.Popen(cmd_photos, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            process_p = subprocess.Popen(cmd_photos, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
             new_photos = monitor_and_upload_realtime(photo_dir, process_p, message.chat.id, message.message_id, silent)
+            _, stderr_p = process_p.communicate()
             new_files_count += new_photos
             if process_p.poll() == 0:
                 profile_success = True
+            else:
+                if stderr_p:
+                    logger.warning(f"gallery-dl photos failed for {platform}/{username}: {stderr_p.strip()}")
 
             # Videos
             video_dir = os.path.join(dest_dir, "Videos")
@@ -664,29 +687,47 @@ def run_batch_download_logic(message, silent=False):
             if cookie_path: cmd_videos += ["--cookies", cookie_path]
             cmd_videos += ["-o", f"user-agent={UA}", "--download-archive", archive_path, "--sleep-request", "5", line]
             
-            process_v = subprocess.Popen(cmd_videos, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            process_v = subprocess.Popen(cmd_videos, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
             new_vids = monitor_and_upload_realtime(video_dir, process_v, message.chat.id, message.message_id, silent)
+            _, stderr_v = process_v.communicate()
             new_files_count += new_vids
             if process_v.poll() == 0:
                 profile_success = True
+            else:
+                if stderr_v:
+                    logger.warning(f"gallery-dl videos failed for {platform}/{username}: {stderr_v.strip()}")
             
             # Fallback to yt-dlp
+            stderr_y = ""
             if process_v.poll() != 0:
                 cmd_ytd = ["yt-dlp", "-o", os.path.join(video_dir, "%(title)s.%(ext)s")]
                 if cookie_path: cmd_ytd += ["--cookies", cookie_path]
                 cmd_ytd += ["--user-agent", UA, "--no-playlist", line]
                 
-                process_y = subprocess.Popen(cmd_ytd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                process_y = subprocess.Popen(cmd_ytd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
                 new_ytd = monitor_and_upload_realtime(video_dir, process_y, message.chat.id, message.message_id, silent)
+                _, stderr_y = process_y.communicate()
                 new_files_count += new_ytd
                 if process_y.poll() == 0:
                     profile_success = True
+                else:
+                    if stderr_y:
+                        logger.warning(f"yt-dlp fallback failed for {platform}/{username}: {stderr_y.strip()}")
 
             if not profile_success and new_photos == 0 and new_vids == 0:
+                err_msg = "Engine error or blocked"
+                combined_err = (stderr_p or "") + "\n" + (stderr_v or "") + "\n" + (stderr_y or "")
+                if "401" in combined_err or "unauthorized" in combined_err.lower() or "login" in combined_err.lower():
+                    err_msg = "Login required / Blocked by platform"
+                elif "429" in combined_err or "rate limit" in combined_err.lower() or "too many requests" in combined_err.lower():
+                    err_msg = "Rate limited by platform"
+                elif "private" in combined_err.lower():
+                    err_msg = "Private profile"
+                
                 if platform in ["instagram", "facebook"] and not cookie_path:
-                    failed_profiles.append(f"{platform}/{username} (Failed - try adding cookies if public download fails)")
+                    failed_profiles.append(f"{platform}/{username} ({err_msg} - try adding session cookies)")
                 else:
-                    failed_profiles.append(f"{platform}/{username} (Engine error / rate limit / check connection)")
+                    failed_profiles.append(f"{platform}/{username} ({err_msg})")
 
     # Format status text as HTML
     status_parts = []
