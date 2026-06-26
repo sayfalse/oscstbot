@@ -42,6 +42,11 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 # User states for interactive wizard (chat_id -> state_string)
 USER_STATES = {}
 
+# Constants
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+PHOTO_FILTER = "extension in ('jpg','jpeg','png','gif','webp','bmp','jfif','heic','avif','tiff','svg')"
+VIDEO_FILTER = "extension in ('mp4','webm','mkv','mov','avi','m4v','flv','wmv','3gp','mpeg','mpg','ts','f4v','mts','m2ts')"
+
 # Helper: Check user authorization
 def is_authorized(user_id):
     if not ALLOWED_USERS:
@@ -107,6 +112,68 @@ def get_tool_path(tool_key):
         return container_path
     return None
 
+# Resolve MINT Social Base Directory
+def get_social_dir():
+    path = MINT_CONFIG.get("social_dir")
+    if path and os.path.exists(path):
+        return path
+    container_path = "/app/mint/mint-social"
+    if os.path.exists(container_path):
+        return container_path
+    return os.path.join(user_home, "mint-social")
+
+# Helper: Get cookies argument for gallery-dl / yt-dlp
+def get_cookies_arg(platform):
+    social_dir = get_social_dir()
+    cookies_dir = os.path.join(social_dir, "cookies")
+    possible_names = [
+        f"{platform}.com_cookies.txt",
+        f"{platform}_cookies.txt"
+    ]
+    for name in possible_names:
+        path = os.path.join(cookies_dir, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+# Parse username and platform from URL
+def parse_profile_url(url, platform):
+    url = url.strip()
+    if not url:
+        return None
+        
+    temp_url = url
+    while temp_url.endswith("/"):
+        temp_url = temp_url[:-1]
+        
+    if "/" not in temp_url and not temp_url.lower().startswith("http"):
+        username = temp_url.replace("@", "")
+        username = username.split("?")[0].split("#")[0].strip()
+        return username if username else None
+        
+    if not url.lower().startswith("http"):
+        url = "https://" + url
+        
+    t = url.replace("http://", "").replace("https://", "")
+    if t.startswith("/"):
+        t = t[1:]
+    parts = t.split("/")
+    if len(parts) < 2:
+        return None
+        
+    dom = parts[0].replace("www.", "").lower()
+    usr = parts[1]
+    
+    if platform == "instagram" and dom != "instagram.com": return None
+    if platform == "tiktok" and dom != "tiktok.com": return None
+    if platform == "facebook" and dom != "facebook.com": return None
+    if platform == "x" and dom not in ["x.com", "twitter.com"]: return None
+    
+    username = usr.replace("@", "")
+    for char in ["?", "#", "/"]:
+        username = username.split(char)[0]
+    return username if username else None
+
 # Send Main Menu Markup
 def send_main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=2)
@@ -114,7 +181,7 @@ def send_main_menu(chat_id):
         InlineKeyboardButton("🔍 Sherlock Scan", callback_data="menu_sherlock"),
         InlineKeyboardButton("🔮 Holehe Check", callback_data="menu_holehe"),
         InlineKeyboardButton("📸 Toutatis Instagram", callback_data="menu_toutatis"),
-        InlineKeyboardButton("📥 Media Downloader", callback_data="menu_download"),
+        InlineKeyboardButton("📥 MINT Social Tool", callback_data="menu_social_sub"),
         InlineKeyboardButton("📊 Bot Status", callback_data="menu_status")
     )
     bot.send_message(
@@ -125,10 +192,27 @@ def send_main_menu(chat_id):
         reply_markup=markup
     )
 
+# Send MINT Social Submenu
+def send_social_submenu(chat_id):
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("📥 Download Single URL Directly", callback_data="social_single"),
+        InlineKeyboardButton("📝 Add Profile to Batch Lists", callback_data="social_add"),
+        InlineKeyboardButton("🔄 Run Batch Download (Lists)", callback_data="social_batch"),
+        InlineKeyboardButton("⬅️ Back to Main Menu", callback_data="social_back")
+    )
+    bot.send_message(
+        chat_id,
+        "📥 *MINT Social Downloader Tool*\n\n"
+        "Select an option to download or manage your target profiles:",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
 # Core Logic: Sherlock
 def run_sherlock_logic(message, username):
     if not is_safe_username(username):
-        bot.reply_to(message, "❌ *Error:* Invalid or unsafe username format. Alphanumerics, periods, underscores, hyphens, and @ only.", parse_mode="Markdown")
+        bot.reply_to(message, "❌ *Error:* Invalid or unsafe username format.", parse_mode="Markdown")
         return
 
     sherlock_dir = get_tool_path("sherlock")
@@ -281,7 +365,7 @@ def run_toutatis_logic(message, username):
     except Exception as e:
         bot.edit_message_text(f"❌ *Error executing Toutatis:* `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
 
-# Core Logic: Downloader
+# Core Logic: Download Single URL (Directly matched to E:\mint\mint.py parameters and cookies)
 def run_download_logic(message, url):
     if not is_safe_url(url):
         bot.reply_to(message, "❌ *Error:* Invalid or unsafe URL format.", parse_mode="Markdown")
@@ -291,25 +375,60 @@ def run_download_logic(message, url):
     temp_dir = tempfile.mkdtemp(prefix="mint_bot_")
     
     try:
-        is_gallery_dl_candidate = any(domain in url.lower() for domain in ["instagram.com", "tiktok.com", "facebook.com", "x.com", "twitter.com"])
+        # Detect platform
+        platform = "generic"
+        if "instagram.com" in url.lower(): platform = "instagram"
+        elif "tiktok.com" in url.lower(): platform = "tiktok"
+        elif "facebook.com" in url.lower(): platform = "facebook"
+        elif "x.com" in url.lower() or "twitter.com" in url.lower(): platform = "x"
+
+        cookie_path = get_cookies_arg(platform)
         download_success = False
         
-        if is_gallery_dl_candidate:
-            logger.info(f"Attempting download via gallery-dl for URL: {url}")
-            cmd_gdl = ["gallery-dl", "-D", temp_dir, url]
+        # 1. Attempt Gallery-DL first if it's a social profile/post
+        if platform != "generic":
+            logger.info(f"Attempting download via gallery-dl for URL: {url} (Platform: {platform})")
+            cmd_gdl = ["gallery-dl", "-D", temp_dir]
+            
+            # Pass cookies if available
+            if cookie_path:
+                cmd_gdl += ["--cookies", cookie_path]
+            elif platform == "tiktok":
+                cmd_gdl += ["--cookies-from-browser", "chrome"]
+                
+            # Match user-agent, sleep request, and filters from mint.py
+            cmd_gdl += [
+                "-o", f"user-agent={UA}",
+                "--sleep-request", "5",
+                url
+            ]
+            
             process_gdl = subprocess.run(cmd_gdl, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
             if process_gdl.returncode == 0:
                 download_success = True
                 logger.info("gallery-dl downloaded media successfully.")
         
+        # 2. Fallback or primary run with yt-dlp
         if not download_success:
             logger.info(f"Attempting download via yt-dlp for URL: {url}")
-            cmd_ytd = ["yt-dlp", "-o", os.path.join(temp_dir, "%(title)s.%(ext)s"), "--no-playlist", url]
+            cmd_ytd = ["yt-dlp", "-o", os.path.join(temp_dir, "%(title)s.%(ext)s"), "--no-playlist"]
+            
+            if cookie_path:
+                cmd_ytd += ["--cookies", cookie_path]
+            elif platform == "tiktok":
+                cmd_ytd += ["--cookies-from-browser", "chrome"]
+                
+            cmd_ytd += [
+                "--user-agent", UA,
+                url
+            ]
+            
             process_ytd = subprocess.run(cmd_ytd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
             if process_ytd.returncode == 0:
                 download_success = True
                 logger.info("yt-dlp downloaded media successfully.")
 
+        # Gather files
         downloaded_files = []
         for root, _, files in os.walk(temp_dir):
             for file in files:
@@ -361,6 +480,183 @@ def run_download_logic(message, url):
         except Exception as e:
             logger.error(f"Failed to delete temp dir: {e}")
 
+# Core Logic: Add Profile to Batch List (reconstructs exact full URLs)
+def run_add_profile_logic(message, target, platform_key, display_name, filename):
+    is_url = "/" in target or "." in target or target.lower().startswith("http")
+    if is_url:
+        if not is_safe_url(target):
+            bot.reply_to(message, "❌ *Error:* Invalid or unsafe URL format.", parse_mode="Markdown")
+            return
+    else:
+        if not is_safe_username(target):
+            bot.reply_to(message, "❌ *Error:* Invalid or unsafe username format.", parse_mode="Markdown")
+            return
+
+    social_dir = get_social_dir()
+    os.makedirs(social_dir, exist_ok=True)
+    profile_file = os.path.join(social_dir, filename)
+    
+    new_username = parse_profile_url(target, platform_key)
+    if not new_username:
+        if "/" in target or "." in target or target.lower().startswith("http"):
+            bot.reply_to(message, f"❌ *Error:* Invalid URL for {display_name}. Make sure it matches the selected platform.", parse_mode="Markdown")
+            return
+        else:
+            new_username = target
+
+    # Reconstruct the full profile URL exactly like mint.py
+    if platform_key == "instagram":
+        profile_url = f"https://www.instagram.com/{new_username}/"
+    elif platform_key == "tiktok":
+        profile_url = f"https://www.tiktok.com/@{new_username}/"
+    elif platform_key == "facebook":
+        profile_url = f"https://www.facebook.com/{new_username}/"
+    elif platform_key == "x":
+        profile_url = f"https://x.com/{new_username}/"
+    else:
+        profile_url = target
+
+    # Duplicate check
+    file_existed = os.path.exists(profile_file)
+    if file_existed:
+        try:
+            with open(profile_file, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            existing_usernames = []
+            for line in lines:
+                line_stripped = line.strip()
+                if line_stripped and not line_stripped.startswith("#") and not line_stripped.startswith(";"):
+                    usr = parse_profile_url(line_stripped, platform_key)
+                    if usr:
+                        existing_usernames.append(usr.lower())
+            if new_username.lower() in existing_usernames:
+                bot.reply_to(message, f"⚠️ *Duplicate:* `{new_username}` is already in your {display_name} list.", parse_mode="Markdown")
+                return
+        except:
+            pass
+
+    try:
+        with open(profile_file, "a", encoding="utf-8") as f:
+            if not file_existed:
+                f.write(f"# MINT Social Tool - {display_name} Profiles List\n")
+                f.write("# Enter profile URLs or usernames here, one per line.\n")
+                f.write("# Lines starting with # or ; are ignored.\n#\n\n")
+            f.write(f"{profile_url}\n")
+        bot.reply_to(message, f"✅ *Success:* Added `{profile_url}` to `{filename}`.", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ *Error:* Failed to write to profile list: `{str(e)}`", parse_mode="Markdown")
+
+# Core Logic: Run Batch Downloader (Uses download-archive, uploads ONLY new media files)
+def run_batch_download_logic(message):
+    social_dir = get_social_dir()
+    if not os.path.exists(social_dir):
+        bot.reply_to(message, "❌ *Error:* MINT Social folder does not exist yet. Add a profile first to initialize it.", parse_mode="Markdown")
+        return
+
+    status_msg = bot.reply_to(message, "🔄 *Batch Downloader:* Scanning lists and checking for new posts...\n_This processes all whitelisted profiles. Please wait..._", parse_mode="Markdown")
+    
+    # 1. Take snapshot of existing files recursively to detect additions
+    before_files = set()
+    for root, _, files in os.walk(social_dir):
+        for file in files:
+            before_files.add(os.path.join(root, file))
+
+    platforms = ["instagram", "tiktok", "facebook", "x"]
+    new_files_downloaded = []
+
+    for platform in platforms:
+        profile_file = os.path.join(social_dir, f"{platform}_profiles.txt")
+        if not os.path.exists(profile_file):
+            continue
+
+        try:
+            with open(profile_file, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+        except:
+            continue
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith(";"):
+                continue
+
+            username = parse_profile_url(line, platform)
+            if not username:
+                continue
+
+            # Run download for this profile exactly like mint.py
+            dest_dir = os.path.join(social_dir, platform, username)
+            os.makedirs(dest_dir, exist_ok=True)
+            cookie_path = get_cookies_arg(platform)
+
+            # Photos
+            photo_dir = os.path.join(dest_dir, "Photos")
+            os.makedirs(photo_dir, exist_ok=True)
+            archive_path = os.path.join(photo_dir, "archive.txt")
+            cmd_photos = ["gallery-dl", "-D", photo_dir, "--filter", PHOTO_FILTER]
+            if cookie_path: cmd_photos += ["--cookies", cookie_path]
+            cmd_photos += ["-o", f"user-agent={UA}", "--download-archive", archive_path, "--sleep-request", "5", line]
+            subprocess.run(cmd_photos, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            # Videos
+            video_dir = os.path.join(dest_dir, "Videos")
+            os.makedirs(video_dir, exist_ok=True)
+            archive_path = os.path.join(video_dir, "archive.txt")
+            cmd_videos = ["gallery-dl", "-D", video_dir, "--filter", VIDEO_FILTER]
+            if cookie_path: cmd_videos += ["--cookies", cookie_path]
+            cmd_videos += ["-o", f"user-agent={UA}", "--download-archive", archive_path, "--sleep-request", "5", line]
+            
+            # Run gallery-dl, fallback to yt-dlp for videos if return code is non-zero
+            process_videos = subprocess.run(cmd_videos, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if process_videos.returncode != 0:
+                cmd_ytd = ["yt-dlp", "-o", os.path.join(video_dir, "%(title)s.%(ext)s")]
+                if cookie_path: cmd_ytd += ["--cookies", cookie_path]
+                cmd_ytd += ["--user-agent", UA, "--no-playlist", line]
+                subprocess.run(cmd_ytd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 2. Take snapshot after download to find new files
+    after_files = set()
+    for root, _, files in os.walk(social_dir):
+        for file in files:
+            after_files.add(os.path.join(root, file))
+
+    added_files = after_files - before_files
+    new_media_files = []
+    for f_path in added_files:
+        if os.path.getsize(f_path) > 0 and os.path.basename(f_path) != "archive.txt":
+            new_media_files.append(f_path)
+
+    if not new_media_files:
+        bot.edit_message_text("🔄 *Batch Downloader:* Finished. No new posts found on your lists.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        return
+
+    bot.edit_message_text(f"📤 *Batch Downloader:* Complete. Uploading {len(new_media_files)} new files...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+    
+    # Upload new files
+    for idx, file_path in enumerate(new_media_files):
+        file_size = os.path.getsize(file_path)
+        if file_size > 50 * 1024 * 1024:
+            bot.send_message(message.chat.id, f"⚠️ File `{os.path.basename(file_path)}` exceeds Telegram's 50MB limit ({file_size // (1024*1024)}MB) and cannot be sent.")
+            continue
+            
+        ext = os.path.splitext(file_path)[1].lower()
+        with open(file_path, "rb") as f:
+            if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                try: bot.send_photo(message.chat.id, f, caption=f"New from list: {os.path.basename(file_path)}")
+                except:
+                    f.seek(0)
+                    bot.send_document(message.chat.id, f, caption=f"New from list: {os.path.basename(file_path)}")
+            elif ext in [".mp4", ".mov", ".webm", ".m4v"]:
+                try: bot.send_video(message.chat.id, f, caption=f"New from list: {os.path.basename(file_path)}")
+                except:
+                    f.seek(0)
+                    bot.send_document(message.chat.id, f, caption=f"New from list: {os.path.basename(file_path)}")
+            else:
+                bot.send_document(message.chat.id, f, caption=f"New from list: {os.path.basename(file_path)}")
+        time.sleep(0.5)
+
+    bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+
 # Helper: Show Status Directly
 def send_status_direct(chat_id):
     total, used, free = shutil.disk_usage("/")
@@ -395,63 +691,40 @@ def handle_menu_click(call):
     elif action == "menu_toutatis":
         USER_STATES[chat_id] = "awaiting_toutatis"
         bot.send_message(chat_id, "📸 *Toutatis:* Please enter the target Instagram username to extract:")
-    elif action == "menu_download":
-        USER_STATES[chat_id] = "awaiting_download"
-        bot.send_message(chat_id, "📥 *Downloader:* Please enter the social media post URL to download:")
     elif action == "menu_status":
         send_status_direct(chat_id)
         
+    # MINT Social Submenu Routing
+    elif action == "menu_social_sub":
+        send_social_submenu(chat_id)
+    elif action == "social_single":
+        USER_STATES[chat_id] = "awaiting_download"
+        bot.send_message(chat_id, "📥 *Downloader:* Please enter the social media post URL to download:")
+    elif action == "social_add":
+        # Ask user for platform first
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("Instagram", callback_data="add_plat_instagram"),
+            InlineKeyboardButton("TikTok", callback_data="add_plat_tiktok"),
+            InlineKeyboardButton("Facebook", callback_data="add_plat_facebook"),
+            InlineKeyboardButton("X / Twitter", callback_data="add_plat_x")
+        )
+        bot.send_message(chat_id, "📝 *Add Profile:* Select the platform:", reply_markup=markup, parse_mode="Markdown")
+    elif action == "social_batch":
+        run_batch_download_logic(call.message)
+    elif action == "social_back":
+        send_main_menu(chat_id)
+        
+    # Add profile platform selection callbacks
+    elif action.startswith("add_plat_"):
+        platform = action.replace("add_plat_", "")
+        USER_STATES[chat_id] = f"awaiting_add_{platform}"
+        bot.send_message(chat_id, f"📝 *Add to {platform.capitalize()} List:* Enter target username or profile URL:")
+
     try:
         bot.answer_callback_query(call.id)
     except:
         pass
-
-# Command Handlers (Fallback/Direct triggers)
-@bot.message_handler(commands=['start', 'help'])
-@check_auth
-def send_welcome(message):
-    send_main_menu(message.chat.id)
-
-@bot.message_handler(commands=['status'])
-@check_auth
-def run_status_command(message):
-    send_status_direct(message.chat.id)
-
-@bot.message_handler(commands=['sherlock'])
-@check_auth
-def run_sherlock_command(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ *Usage:* `/sherlock <username>`", parse_mode="Markdown")
-        return
-    run_sherlock_logic(message, args[1].strip())
-
-@bot.message_handler(commands=['holehe'])
-@check_auth
-def run_holehe_command(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ *Usage:* `/holehe <email>`", parse_mode="Markdown")
-        return
-    run_holehe_logic(message, args[1].strip())
-
-@bot.message_handler(commands=['toutatis'])
-@check_auth
-def run_toutatis_command(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ *Usage:* `/toutatis <username>`", parse_mode="Markdown")
-        return
-    run_toutatis_logic(message, args[1].strip())
-
-@bot.message_handler(commands=['download'])
-@check_auth
-def run_download_command(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ *Usage:* `/download <url>`", parse_mode="Markdown")
-        return
-    run_download_logic(message, args[1].strip())
 
 # Message Handler: Handles text input and interactive wizard states
 @bot.message_handler(func=lambda message: True)
@@ -472,8 +745,27 @@ def handle_user_message(message):
     elif state == "awaiting_download":
         USER_STATES.pop(chat_id, None)
         run_download_logic(message, message.text.strip())
+        
+    # Profile List adding states
+    elif state and state.startswith("awaiting_add_"):
+        USER_STATES.pop(chat_id, None)
+        platform = state.replace("awaiting_add_", "")
+        
+        platforms_meta = {
+            "instagram": ("instagram", "Instagram", "instagram_profiles.txt"),
+            "tiktok": ("tiktok", "TikTok", "tiktok_profiles.txt"),
+            "facebook": ("facebook", "Facebook", "facebook_profiles.txt"),
+            "x": ("x", "X/Twitter", "x_profiles.txt")
+        }
+        
+        meta = platforms_meta.get(platform)
+        if meta:
+            platform_key, display_name, filename = meta
+            run_add_profile_logic(message, message.text.strip(), platform_key, display_name, filename)
+        else:
+            bot.reply_to(message, "❌ *Error:* Invalid state.")
     else:
-        # Standard behavior: show interactive menu
+        # Standard behavior: show main menu
         send_main_menu(chat_id)
 
 # Start long polling
