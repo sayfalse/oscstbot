@@ -310,14 +310,10 @@ def run_sherlock_logic(message, username):
         bot.reply_to(message, "Error: Sherlock path is not configured on this host/container.", parse_mode="HTML")
         return
 
-    sherlock_py = os.path.join(sherlock_dir, "sherlock", "sherlock.py")
-    if not os.path.exists(sherlock_py):
-        sherlock_py = os.path.join(sherlock_dir, "sherlock.py")
-
     status_msg = bot.reply_to(message, f"Sherlock: Querying 300+ platforms for <code>{escape_html(username)}</code>...\n<i>This may take up to a minute.</i>", parse_mode="HTML")
 
     try:
-        cmd = [sys.executable, sherlock_py, "--timeout", "10", username]
+        cmd = [sys.executable, "-m", "sherlock", "--timeout", "10", username]
         process = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
