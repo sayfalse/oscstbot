@@ -91,15 +91,12 @@ def is_safe_url(url):
 # Detect if a URL is a profile instead of a single post
 def is_profile_url(url):
     url_lower = url.lower()
-    # Instagram profile check (no /p/, /reel/, /tv/, /stories/)
     if "instagram.com" in url_lower:
         if not any(x in url_lower for x in ["/p/", "/reel/", "/tv/", "/stories/"]):
             return True
-    # TikTok profile check (contains @username but not /video/)
     if "tiktok.com" in url_lower:
         if "@" in url_lower and "/video/" not in url_lower:
             return True
-    # X/Twitter profile check (no /status/)
     if "x.com" in url_lower or "twitter.com" in url_lower:
         if "/status/" not in url_lower:
             return True
@@ -260,7 +257,6 @@ def upload_single_file(chat_id, file_path, reply_to_id, caption=""):
 def monitor_and_upload_realtime(temp_dir, process, chat_id, reply_to_id, silent=False):
     uploaded = set()
     
-    # Run loop while process is active
     while process.poll() is None:
         if not silent:
             for root, _, files in os.walk(temp_dir):
@@ -275,7 +271,6 @@ def monitor_and_upload_realtime(temp_dir, process, chat_id, reply_to_id, silent=
                             continue
                         time.sleep(0.8)
                         size_after = os.path.getsize(file_path)
-                        # File has finished writing when size is stable
                         if size_before == size_after:
                             upload_single_file(chat_id, file_path, reply_to_id)
                             uploaded.add(file_path)
@@ -283,7 +278,6 @@ def monitor_and_upload_realtime(temp_dir, process, chat_id, reply_to_id, silent=
                         logger.error(f"Error checking file for real-time upload: {e}")
         time.sleep(0.5)
         
-    # Post-execution final sweep to capture any remaining files
     if not silent:
         for root, _, files in os.walk(temp_dir):
             for file in files:
@@ -455,13 +449,12 @@ def run_toutatis_logic(message, username):
     except Exception as e:
         bot.edit_message_text(f"Error executing Toutatis: `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
 
-# Core Logic: Download Single URL (Supports real-time transfers and silent archiving)
+# Core Logic: Download Single URL
 def run_download_logic(message, url, silent=False):
     if not is_safe_url(url):
         bot.reply_to(message, "Error: Invalid or unsafe URL format.", parse_mode="Markdown")
         return
 
-    # User entered a profile URL instead of a post URL in single download
     if is_profile_url(url):
         bot.reply_to(
             message,
@@ -474,14 +467,11 @@ def run_download_logic(message, url, silent=False):
 
     status_msg = bot.reply_to(message, "Media Downloader: Starting download connection...\n_Media transfer will occur in real time._", parse_mode="Markdown")
     
-    # Resolve target directory based on archive mode
     social_dir = get_social_dir()
     if silent:
-        # Save to persistent archive folder on the server
         dest_dir = os.path.join(social_dir, "downloads")
         os.makedirs(dest_dir, exist_ok=True)
     else:
-        # Temporary directory for immediate download and upload
         dest_dir = tempfile.mkdtemp(prefix="mint_bot_")
     
     try:
@@ -494,7 +484,6 @@ def run_download_logic(message, url, silent=False):
         cookie_path = get_cookies_arg(platform)
         download_success = False
         
-        # 1. Attempt Gallery-DL first
         if platform != "generic":
             cmd_gdl = ["gallery-dl", "-D", dest_dir]
             if cookie_path: cmd_gdl += ["--cookies", cookie_path]
@@ -502,12 +491,10 @@ def run_download_logic(message, url, silent=False):
             cmd_gdl += ["-o", f"user-agent={UA}", "--sleep-request", "5", url]
             
             process = subprocess.Popen(cmd_gdl, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            # Monitor and upload in real-time
             uploaded_count = monitor_and_upload_realtime(dest_dir, process, message.chat.id, message.message_id, silent)
             if process.poll() == 0 or uploaded_count > 0:
                 download_success = True
 
-        # 2. Fallback or primary run with yt-dlp
         if not download_success:
             cmd_ytd = ["yt-dlp", "-o", os.path.join(dest_dir, "%(title)s.%(ext)s"), "--no-playlist"]
             if cookie_path: cmd_ytd += ["--cookies", cookie_path]
@@ -520,7 +507,7 @@ def run_download_logic(message, url, silent=False):
                 download_success = True
 
         if not download_success:
-            bot.edit_message_text("Error: Failed to download media. The link may be private, expired, or unsupported.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Error: Failed to download media. The link may be private, expired, or unsupported. Make sure your session cookies are configured.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
             return
 
         if silent:
@@ -532,7 +519,6 @@ def run_download_logic(message, url, silent=False):
         logger.error(f"Error during media download: {e}")
         bot.edit_message_text(f"Error executing download: `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
     finally:
-        # Clean up temp folder only if it was not a silent archive
         if not silent and os.path.exists(dest_dir) and "mint_bot_" in dest_dir:
             try:
                 shutil.rmtree(dest_dir)
@@ -605,7 +591,7 @@ def run_add_profile_logic(message, target, platform_key, display_name, filename)
     except Exception as e:
         bot.reply_to(message, f"Error: Failed to write to profile list: `{str(e)}`", parse_mode="Markdown")
 
-# Core Logic: Run Batch Downloader (Supports real-time transfers and silent archiving)
+# Core Logic: Run Batch Downloader (Reports engine failures and rate limits)
 def run_batch_download_logic(message, silent=False):
     social_dir = get_social_dir()
     if not os.path.exists(social_dir):
@@ -614,7 +600,7 @@ def run_batch_download_logic(message, silent=False):
 
     status_msg = bot.reply_to(message, "Batch Downloader: Scanning lists and checking for new posts...\n_Media transfer will occur in real time._", parse_mode="Markdown")
     
-    # 1. Take snapshot of existing files recursively to detect additions
+    # 1. Take snapshot of existing files
     before_files = set()
     for root, _, files in os.walk(social_dir):
         for file in files:
@@ -622,6 +608,7 @@ def run_batch_download_logic(message, silent=False):
 
     platforms = ["instagram", "tiktok", "facebook", "x"]
     new_files_count = 0
+    failed_profiles = []
 
     for platform in platforms:
         profile_file = os.path.join(social_dir, f"{platform}_profiles.txt")
@@ -647,6 +634,13 @@ def run_batch_download_logic(message, silent=False):
             os.makedirs(dest_dir, exist_ok=True)
             cookie_path = get_cookies_arg(platform)
 
+            # Warn user if running Instagram/Facebook without cookies configured
+            if platform in ["instagram", "facebook"] and not cookie_path:
+                failed_profiles.append(f"{platform}/{username} (No session cookies configured)")
+                continue
+
+            profile_success = False
+
             # Photos
             photo_dir = os.path.join(dest_dir, "Photos")
             os.makedirs(photo_dir, exist_ok=True)
@@ -658,6 +652,8 @@ def run_batch_download_logic(message, silent=False):
             process_p = subprocess.Popen(cmd_photos, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             new_photos = monitor_and_upload_realtime(photo_dir, process_p, message.chat.id, message.message_id, silent)
             new_files_count += new_photos
+            if process_p.poll() == 0:
+                profile_success = True
 
             # Videos
             video_dir = os.path.join(dest_dir, "Videos")
@@ -670,9 +666,11 @@ def run_batch_download_logic(message, silent=False):
             process_v = subprocess.Popen(cmd_videos, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             new_vids = monitor_and_upload_realtime(video_dir, process_v, message.chat.id, message.message_id, silent)
             new_files_count += new_vids
+            if process_v.poll() == 0:
+                profile_success = True
             
-            # Fallback to yt-dlp if gallery-dl did not capture new videos
-            if process_v.poll() != 0 and new_vids == 0:
+            # Fallback to yt-dlp if gallery-dl did not succeed
+            if process_v.poll() != 0:
                 cmd_ytd = ["yt-dlp", "-o", os.path.join(video_dir, "%(title)s.%(ext)s")]
                 if cookie_path: cmd_ytd += ["--cookies", cookie_path]
                 cmd_ytd += ["--user-agent", UA, "--no-playlist", line]
@@ -680,15 +678,81 @@ def run_batch_download_logic(message, silent=False):
                 process_y = subprocess.Popen(cmd_ytd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 new_ytd = monitor_and_upload_realtime(video_dir, process_y, message.chat.id, message.message_id, silent)
                 new_files_count += new_ytd
+                if process_y.poll() == 0:
+                    profile_success = True
+
+            if not profile_success and new_photos == 0 and new_vids == 0:
+                failed_profiles.append(f"{platform}/{username} (Engine returned non-zero code / check connection/rate limits)")
 
     # Update completion status
+    status_parts = []
     if silent:
-        bot.edit_message_text(f"Success: Batch download finished. Saved to server archive: `{social_dir}`.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        status_parts.append(f"Success: Batch download finished. Saved to server archive: `{social_dir}`.")
     else:
         if new_files_count == 0:
-            bot.edit_message_text("Batch Downloader: Finished. No new posts found on your lists.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            status_parts.append("Batch Downloader: Finished. No new posts found on your lists.")
         else:
-            bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+            status_parts.append(f"Batch Downloader: Completed. Uploaded {new_files_count} new files.")
+
+    if failed_profiles:
+        status_parts.append("\n⚠️ *Warnings / Failures:*")
+        for fp in failed_profiles:
+            status_parts.append(f"• `{fp}`")
+        status_parts.append("\n_Note: Social networks like Instagram require cookies to scan profiles. Drag and drop your `instagram.com_cookies.txt` file into this chat to securely configure cookies._")
+
+    final_text = "\n".join(status_parts)
+    bot.edit_message_text(final_text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+
+# Document Handler: Securely upload cookie files directly through chat
+@bot.message_handler(content_types=['document'])
+@check_auth
+def handle_document_upload(message):
+    try:
+        file_name = message.document.file_name
+        # Validate filename matches expected cookie format
+        if not file_name.endswith("_cookies.txt"):
+            bot.reply_to(
+                message,
+                "Document received but ignored.\n\n"
+                "• To configure session cookies, please upload a Netscape cookie file named exactly like:\n"
+                "  `instagram.com_cookies.txt` or `facebook.com_cookies.txt`\n"
+                "  Drag and drop the file directly into this chat.",
+                parse_mode="Markdown"
+            )
+            return
+            
+        social_dir = get_social_dir()
+        cookies_dir = os.path.join(social_dir, "cookies")
+        os.makedirs(cookies_dir, exist_ok=True)
+        
+        # Prevent path traversal attacks
+        clean_name = os.path.basename(file_name)
+        dest_path = os.path.join(cookies_dir, clean_name)
+        
+        # Download file
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        with open(dest_path, "wb") as new_file:
+            new_file.write(downloaded_file)
+            
+        # Apply secure permissions
+        try:
+            os.chmod(dest_path, 0o600)
+        except:
+            pass
+            
+        bot.reply_to(
+            message,
+            f"Success: Saved session cookies file `{clean_name}` securely to server storage.\n"
+            f"You can now run downloads for this platform.",
+            parse_mode="Markdown"
+        )
+        logger.info(f"User uploaded cookies file: {clean_name}")
+        
+    except Exception as e:
+        logger.error(f"Error handling document upload: {e}")
+        bot.reply_to(message, f"Error saving file: `{str(e)}`")
 
 # Helper: Show Status Directly
 def send_status_direct(chat_id):
@@ -731,7 +795,7 @@ def handle_menu_click(call):
     elif action == "menu_social_sub":
         send_social_submenu(chat_id)
         
-    # Single Downloader Options (Prompt Mode Choice)
+    # Single Downloader Options
     elif action == "social_single":
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -759,7 +823,7 @@ def handle_menu_click(call):
         )
         bot.send_message(chat_id, "Add Profile: Select the platform:", reply_markup=markup, parse_mode="Markdown")
         
-    # Batch Downloader Options (Prompt Mode Choice)
+    # Batch Downloader Options
     elif action == "social_batch":
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
