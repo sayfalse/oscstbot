@@ -59,7 +59,7 @@ def is_authorized(user_id):
 def check_auth(func):
     def wrapper(message, *args, **kwargs):
         if not is_authorized(message.from_user.id):
-            bot.reply_to(message, "*Access Denied.*\nYou are not authorized to use this MINT Bot instance.", parse_mode="Markdown")
+            bot.reply_to(message, "<b>Access Denied.</b>\nYou are not authorized to use this MINT Bot instance.", parse_mode="HTML")
             logger.warning(f"Unauthorized access attempt by User ID: {message.from_user.id} ({message.from_user.username})")
             return
         return func(message, *args, **kwargs)
@@ -69,6 +69,12 @@ def check_auth(func):
 def strip_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
+
+# Helper to escape HTML special characters
+def escape_html(text):
+    if not text:
+        return ""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 # Input Whitelist Regexes
 def is_safe_username(username):
@@ -201,9 +207,9 @@ def send_main_menu(chat_id):
     )
     bot.send_message(
         chat_id,
-        "*MINT OSINT & Media Command Center Bot*\n\n"
+        "<b>MINT OSINT & Media Command Center Bot</b>\n\n"
         "Select a tool from the menu below to begin:",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=markup
     )
 
@@ -218,9 +224,9 @@ def send_social_submenu(chat_id):
     )
     bot.send_message(
         chat_id,
-        "*MINT Social Downloader Tool*\n\n"
+        "<b>MINT Social Downloader Tool</b>\n\n"
         "Select an option to download or manage your target profiles:",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=markup
     )
 
@@ -228,7 +234,7 @@ def send_social_submenu(chat_id):
 def upload_single_file(chat_id, file_path, reply_to_id, caption=""):
     file_size = os.path.getsize(file_path)
     if file_size > 50 * 1024 * 1024:
-        bot.send_message(chat_id, f"File `{os.path.basename(file_path)}` exceeds Telegram's 50MB limit ({file_size // (1024*1024)}MB) and cannot be sent.", reply_to_message_id=reply_to_id)
+        bot.send_message(chat_id, f"File <code>{escape_html(os.path.basename(file_path))}</code> exceeds Telegram's 50MB limit ({file_size // (1024*1024)}MB) and cannot be sent.", reply_to_message_id=reply_to_id, parse_mode="HTML")
         return False
         
     ext = os.path.splitext(file_path)[1].lower()
@@ -296,19 +302,19 @@ def monitor_and_upload_realtime(temp_dir, process, chat_id, reply_to_id, silent=
 # Core Logic: Sherlock
 def run_sherlock_logic(message, username):
     if not is_safe_username(username):
-        bot.reply_to(message, "Error: Invalid or unsafe username format.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Invalid or unsafe username format.", parse_mode="HTML")
         return
 
     sherlock_dir = get_tool_path("sherlock")
     if not sherlock_dir:
-        bot.reply_to(message, "Error: Sherlock path is not configured on this host/container.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Sherlock path is not configured on this host/container.", parse_mode="HTML")
         return
 
     sherlock_py = os.path.join(sherlock_dir, "sherlock", "sherlock.py")
     if not os.path.exists(sherlock_py):
         sherlock_py = os.path.join(sherlock_dir, "sherlock.py")
 
-    status_msg = bot.reply_to(message, f"Sherlock: Querying 300+ platforms for `{username}`...\n_This may take up to a minute._", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"Sherlock: Querying 300+ platforms for <code>{escape_html(username)}</code>...\n<i>This may take up to a minute.</i>", parse_mode="HTML")
 
     try:
         cmd = [sys.executable, sherlock_py, "--timeout", "10", username]
@@ -327,9 +333,9 @@ def run_sherlock_logic(message, username):
             local_report = os.path.join(sherlock_dir, f"{username}.txt")
 
         if not output:
-            bot.edit_message_text("Error: No output received from Sherlock.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Error: No output received from Sherlock.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
         elif len(output) > 4000:
-            bot.edit_message_text("Scan complete. Result exceeds message limit, sending as file...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Scan complete. Result exceeds message limit, sending as file...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
                 f.write(output)
                 temp_name = f.name
@@ -337,30 +343,30 @@ def run_sherlock_logic(message, username):
                 bot.send_document(message.chat.id, report, visible_file_name=f"sherlock_{username}.txt", reply_to_message_id=message.message_id)
             os.remove(temp_name)
         else:
-            formatted_output = f"Sherlock Results for {username}:\n\n```\n{output}\n```"
-            bot.edit_message_text(formatted_output, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            formatted_output = f"Sherlock Results for {escape_html(username)}:\n\n<pre>{escape_html(output)}</pre>"
+            bot.edit_message_text(formatted_output, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             
         if os.path.exists(local_report):
             try: os.remove(local_report)
             except: pass
                 
     except subprocess.TimeoutExpired:
-        bot.edit_message_text("Error: Sherlock process timed out (exceeded 120s).", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("Error: Sherlock process timed out (exceeded 120s).", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
     except Exception as e:
-        bot.edit_message_text(f"Error executing Sherlock: `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"Error executing Sherlock: <code>{escape_html(str(e))}</code>", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
 
 # Core Logic: Holehe
 def run_holehe_logic(message, email):
     if not is_safe_email(email):
-        bot.reply_to(message, "Error: Invalid or unsafe email address format.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Invalid or unsafe email address format.", parse_mode="HTML")
         return
 
     holehe_dir = get_tool_path("holehe")
     if not holehe_dir:
-        bot.reply_to(message, "Error: Holehe path is not configured on this host/container.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Holehe path is not configured on this host/container.", parse_mode="HTML")
         return
 
-    status_msg = bot.reply_to(message, f"Holehe: Querying registration endpoints for `{email}`...\n_This may take up to a minute._", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"Holehe: Querying registration endpoints for <code>{escape_html(email)}</code>...\n<i>This may take up to a minute.</i>", parse_mode="HTML")
 
     try:
         cmd = [sys.executable, "-m", "holehe.cli", email]
@@ -386,9 +392,9 @@ def run_holehe_logic(message, email):
             clean_output = output
 
         if not clean_output:
-            bot.edit_message_text("Error: No output received from Holehe.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Error: No output received from Holehe.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
         elif len(clean_output) > 4000:
-            bot.edit_message_text("Scan complete. Result exceeds message limit, sending as file...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Scan complete. Result exceeds message limit, sending as file...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
                 f.write(output)
                 temp_name = f.name
@@ -396,26 +402,26 @@ def run_holehe_logic(message, email):
                 bot.send_document(message.chat.id, report, visible_file_name=f"holehe_{email}.txt", reply_to_message_id=message.message_id)
             os.remove(temp_name)
         else:
-            formatted_output = f"Holehe Results for {email}:\n\n```\n{clean_output}\n```"
-            bot.edit_message_text(formatted_output, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            formatted_output = f"Holehe Results for {escape_html(email)}:\n\n<pre>{escape_html(clean_output)}</pre>"
+            bot.edit_message_text(formatted_output, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             
     except subprocess.TimeoutExpired:
-        bot.edit_message_text("Error: Holehe process timed out (exceeded 120s).", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("Error: Holehe process timed out (exceeded 120s).", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
     except Exception as e:
-        bot.edit_message_text(f"Error executing Holehe: `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"Error executing Holehe: <code>{escape_html(str(e))}</code>", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
 
 # Core Logic: Toutatis
 def run_toutatis_logic(message, username):
     if not is_safe_username(username):
-        bot.reply_to(message, "Error: Invalid or unsafe username format.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Invalid or unsafe username format.", parse_mode="HTML")
         return
 
     toutatis_dir = get_tool_path("toutatis")
     if not toutatis_dir:
-        bot.reply_to(message, "Error: Toutatis path is not configured on this host/container.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Toutatis path is not configured on this host/container.", parse_mode="HTML")
         return
 
-    status_msg = bot.reply_to(message, f"Toutatis: Extracting Instagram profile metadata for `{username}`...", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"Toutatis: Extracting Instagram profile metadata for <code>{escape_html(username)}</code>...", parse_mode="HTML")
 
     try:
         cmd = [sys.executable, "-m", "toutatis", "-u", username]
@@ -431,9 +437,9 @@ def run_toutatis_logic(message, username):
         output = strip_ansi(process.stdout + "\n" + process.stderr).strip()
 
         if not output:
-            bot.edit_message_text("Error: No output received from Toutatis.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Error: No output received from Toutatis.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
         elif len(output) > 4000:
-            bot.edit_message_text("Scan complete. Result exceeds message limit, sending as file...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Scan complete. Result exceeds message limit, sending as file...", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
                 f.write(output)
                 temp_name = f.name
@@ -441,31 +447,31 @@ def run_toutatis_logic(message, username):
                 bot.send_document(message.chat.id, report, visible_file_name=f"toutatis_{username}.txt", reply_to_message_id=message.message_id)
             os.remove(temp_name)
         else:
-            formatted_output = f"Toutatis Instagram Metadata for {username}:\n\n```\n{output}\n```"
-            bot.edit_message_text(formatted_output, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            formatted_output = f"Toutatis Instagram Metadata for {escape_html(username)}:\n\n<pre>{escape_html(output)}</pre>"
+            bot.edit_message_text(formatted_output, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             
     except subprocess.TimeoutExpired:
-        bot.edit_message_text("Error: Toutatis process timed out (exceeded 90s).", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text("Error: Toutatis process timed out (exceeded 90s).", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
     except Exception as e:
-        bot.edit_message_text(f"Error executing Toutatis: `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"Error executing Toutatis: <code>{escape_html(str(e))}</code>", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
 
 # Core Logic: Download Single URL
 def run_download_logic(message, url, silent=False):
     if not is_safe_url(url):
-        bot.reply_to(message, "Error: Invalid or unsafe URL format.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: Invalid or unsafe URL format.", parse_mode="HTML")
         return
 
     if is_profile_url(url):
         bot.reply_to(
             message,
-            "💡 *Tip:* This is a profile URL, not a single post URL.\n\n"
-            "• To download an entire profile recursively, please use **Add Profile to Batch Lists** and then run a batch download.\n"
-            "• For direct downloader, please provide a link to a specific post (e.g., `https://www.instagram.com/p/...`).",
-            parse_mode="Markdown"
+            "💡 <b>Tip:</b> This is a profile URL, not a single post URL.\n\n"
+            "• To download an entire profile recursively, please use <b>Add Profile to Batch Lists</b> and then run a batch download.\n"
+            "• For direct downloader, please provide a link to a specific post (e.g., <code>https://www.instagram.com/p/...</code>).",
+            parse_mode="HTML"
         )
         return
 
-    status_msg = bot.reply_to(message, "Media Downloader: Starting download connection...\n_Media transfer will occur in real time._", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, "Media Downloader: Starting download connection...\n<i>Media transfer will occur in real time.</i>", parse_mode="HTML")
     
     social_dir = get_social_dir()
     if silent:
@@ -507,17 +513,17 @@ def run_download_logic(message, url, silent=False):
                 download_success = True
 
         if not download_success:
-            bot.edit_message_text("Error: Failed to download media. The link may be private, expired, or unsupported. Make sure your session cookies are configured.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text("Error: Failed to download media. The link may be private, expired, or unsupported. Make sure your session cookies are configured.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             return
 
         if silent:
-            bot.edit_message_text(f"Success: Media downloaded and saved silently to server archive: `{dest_dir}`.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"Success: Media downloaded and saved silently to server archive: <code>{escape_html(dest_dir)}</code>.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
         else:
             bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
 
     except Exception as e:
         logger.error(f"Error during media download: {e}")
-        bot.edit_message_text(f"Error executing download: `{str(e)}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"Error executing download: <code>{escape_html(str(e))}</code>", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
     finally:
         if not silent and os.path.exists(dest_dir) and "mint_bot_" in dest_dir:
             try:
@@ -531,11 +537,11 @@ def run_add_profile_logic(message, target, platform_key, display_name, filename)
     is_url = "/" in target or "." in target or target.lower().startswith("http")
     if is_url:
         if not is_safe_url(target):
-            bot.reply_to(message, "Error: Invalid or unsafe URL format.", parse_mode="Markdown")
+            bot.reply_to(message, "Error: Invalid or unsafe URL format.", parse_mode="HTML")
             return
     else:
         if not is_safe_username(target):
-            bot.reply_to(message, "Error: Invalid or unsafe username format.", parse_mode="Markdown")
+            bot.reply_to(message, "Error: Invalid or unsafe username format.", parse_mode="HTML")
             return
 
     social_dir = get_social_dir()
@@ -545,7 +551,7 @@ def run_add_profile_logic(message, target, platform_key, display_name, filename)
     new_username = parse_profile_url(target, platform_key)
     if not new_username:
         if "/" in target or "." in target or target.lower().startswith("http"):
-            bot.reply_to(message, f"Error: Invalid URL for {display_name}. Make sure it matches the selected platform.", parse_mode="Markdown")
+            bot.reply_to(message, f"Error: Invalid URL for {display_name}. Make sure it matches the selected platform.", parse_mode="HTML")
             return
         else:
             new_username = target
@@ -575,7 +581,7 @@ def run_add_profile_logic(message, target, platform_key, display_name, filename)
                     if usr:
                         existing_usernames.append(usr.lower())
             if new_username.lower() in existing_usernames:
-                bot.reply_to(message, f"Duplicate: `{new_username}` is already in your {display_name} list.", parse_mode="Markdown")
+                bot.reply_to(message, f"Duplicate: <code>{escape_html(new_username)}</code> is already in your {display_name} list.", parse_mode="HTML")
                 return
         except:
             pass
@@ -587,18 +593,18 @@ def run_add_profile_logic(message, target, platform_key, display_name, filename)
                 f.write("# Enter profile URLs or usernames here, one per line.\n")
                 f.write("# Lines starting with # or ; are ignored.\n#\n\n")
             f.write(f"{profile_url}\n")
-        bot.reply_to(message, f"Success: Added `{profile_url}` to `{filename}`.", parse_mode="Markdown")
+        bot.reply_to(message, f"Success: Added <code>{escape_html(profile_url)}</code> to <code>{escape_html(filename)}</code>.", parse_mode="HTML")
     except Exception as e:
-        bot.reply_to(message, f"Error: Failed to write to profile list: `{str(e)}`", parse_mode="Markdown")
+        bot.reply_to(message, f"Error: Failed to write to profile list: <code>{escape_html(str(e))}</code>", parse_mode="HTML")
 
-# Core Logic: Run Batch Downloader (Reports engine failures and rate limits)
+# Core Logic: Run Batch Downloader (Uses HTML parser)
 def run_batch_download_logic(message, silent=False):
     social_dir = get_social_dir()
     if not os.path.exists(social_dir):
-        bot.reply_to(message, "Error: MINT Social folder does not exist yet. Add a profile first to initialize it.", parse_mode="Markdown")
+        bot.reply_to(message, "Error: MINT Social folder does not exist yet. Add a profile first to initialize it.", parse_mode="HTML")
         return
 
-    status_msg = bot.reply_to(message, "Batch Downloader: Scanning lists and checking for new posts...\n_Media transfer will occur in real time._", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, "Batch Downloader: Scanning lists and checking for new posts...\n<i>Media transfer will occur in real time.</i>", parse_mode="HTML")
     
     # 1. Take snapshot of existing files
     before_files = set()
@@ -634,7 +640,7 @@ def run_batch_download_logic(message, silent=False):
             os.makedirs(dest_dir, exist_ok=True)
             cookie_path = get_cookies_arg(platform)
 
-            # Warn user if running Instagram/Facebook without cookies configured
+            # Check if cookies are missing
             if platform in ["instagram", "facebook"] and not cookie_path:
                 failed_profiles.append(f"{platform}/{username} (No session cookies configured)")
                 continue
@@ -669,7 +675,7 @@ def run_batch_download_logic(message, silent=False):
             if process_v.poll() == 0:
                 profile_success = True
             
-            # Fallback to yt-dlp if gallery-dl did not succeed
+            # Fallback to yt-dlp
             if process_v.poll() != 0:
                 cmd_ytd = ["yt-dlp", "-o", os.path.join(video_dir, "%(title)s.%(ext)s")]
                 if cookie_path: cmd_ytd += ["--cookies", cookie_path]
@@ -682,12 +688,12 @@ def run_batch_download_logic(message, silent=False):
                     profile_success = True
 
             if not profile_success and new_photos == 0 and new_vids == 0:
-                failed_profiles.append(f"{platform}/{username} (Engine returned non-zero code / check connection/rate limits)")
+                failed_profiles.append(f"{platform}/{username} (Engine error / rate limit / check connection)")
 
-    # Update completion status
+    # Format status text as HTML
     status_parts = []
     if silent:
-        status_parts.append(f"Success: Batch download finished. Saved to server archive: `{social_dir}`.")
+        status_parts.append(f"Success: Batch download finished. Saved to server archive: <code>{escape_html(social_dir)}</code>.")
     else:
         if new_files_count == 0:
             status_parts.append("Batch Downloader: Finished. No new posts found on your lists.")
@@ -695,13 +701,13 @@ def run_batch_download_logic(message, silent=False):
             status_parts.append(f"Batch Downloader: Completed. Uploaded {new_files_count} new files.")
 
     if failed_profiles:
-        status_parts.append("\n⚠️ *Warnings / Failures:*")
+        status_parts.append("\n<b>Warnings / Failures:</b>")
         for fp in failed_profiles:
-            status_parts.append(f"• `{fp}`")
-        status_parts.append("\n_Note: Social networks like Instagram require cookies to scan profiles. Drag and drop your `instagram.com_cookies.txt` file into this chat to securely configure cookies._")
+            status_parts.append(f"• <code>{escape_html(fp)}</code>")
+        status_parts.append("\n<i>Note: Social networks like Instagram require cookies to scan profiles. Drag and drop your <code>instagram.com_cookies.txt</code> file into this chat to securely configure cookies.</i>")
 
     final_text = "\n".join(status_parts)
-    bot.edit_message_text(final_text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+    bot.edit_message_text(final_text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
 
 # Document Handler: Securely upload cookie files directly through chat
 @bot.message_handler(content_types=['document'])
@@ -715,9 +721,9 @@ def handle_document_upload(message):
                 message,
                 "Document received but ignored.\n\n"
                 "• To configure session cookies, please upload a Netscape cookie file named exactly like:\n"
-                "  `instagram.com_cookies.txt` or `facebook.com_cookies.txt`\n"
+                "  <code>instagram.com_cookies.txt</code> or <code>facebook.com_cookies.txt</code>\n"
                 "  Drag and drop the file directly into this chat.",
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             return
             
@@ -725,18 +731,15 @@ def handle_document_upload(message):
         cookies_dir = os.path.join(social_dir, "cookies")
         os.makedirs(cookies_dir, exist_ok=True)
         
-        # Prevent path traversal attacks
         clean_name = os.path.basename(file_name)
         dest_path = os.path.join(cookies_dir, clean_name)
         
-        # Download file
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
         with open(dest_path, "wb") as new_file:
             new_file.write(downloaded_file)
             
-        # Apply secure permissions
         try:
             os.chmod(dest_path, 0o600)
         except:
@@ -744,30 +747,30 @@ def handle_document_upload(message):
             
         bot.reply_to(
             message,
-            f"Success: Saved session cookies file `{clean_name}` securely to server storage.\n"
+            f"Success: Saved session cookies file <code>{escape_html(clean_name)}</code> securely to server storage.\n"
             f"You can now run downloads for this platform.",
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
         logger.info(f"User uploaded cookies file: {clean_name}")
         
     except Exception as e:
         logger.error(f"Error handling document upload: {e}")
-        bot.reply_to(message, f"Error saving file: `{str(e)}`")
+        bot.reply_to(message, f"Error saving file: <code>{escape_html(str(e))}</code>", parse_mode="HTML")
 
 # Helper: Show Status Directly
 def send_status_direct(chat_id):
     total, used, free = shutil.disk_usage("/")
     status_text = (
-        "MINT Bot Status\n\n"
-        f"• Platform: `{sys.platform.upper()}`\n"
-        f"• Python Version: `{sys.version.split()[0]}`\n"
-        f"• Disk Usage: `{used // (2**30)}GB` / `{total // (2**30)}GB` used ({free // (2**30)}GB free)\n"
-        f"• Access Control: `{'ENABLED' if ALLOWED_USERS else 'DISABLED (PUBLIC)'}`\n"
-        f"• Sherlock Path: `{get_tool_path('sherlock') is not None}`\n"
-        f"• Holehe Path: `{get_tool_path('holehe') is not None}`\n"
-        f"• Toutatis Path: `{get_tool_path('toutatis') is not None}`\n"
+        "<b>MINT Bot Status</b>\n\n"
+        f"• Platform: <code>{sys.platform.upper()}</code>\n"
+        f"• Python Version: <code>{sys.version.split()[0]}</code>\n"
+        f"• Disk Usage: <code>{used // (2**30)}GB</code> / <code>{total // (2**30)}GB</code> used ({free // (2**30)}GB free)\n"
+        f"• Access Control: <code>{'ENABLED' if ALLOWED_USERS else 'DISABLED (PUBLIC)'}</code>\n"
+        f"• Sherlock Path: <code>{get_tool_path('sherlock') is not None}</code>\n"
+        f"• Holehe Path: <code>{get_tool_path('holehe') is not None}</code>\n"
+        f"• Toutatis Path: <code>{get_tool_path('toutatis') is not None}</code>\n"
     )
-    bot.send_message(chat_id, status_text, parse_mode="Markdown")
+    bot.send_message(chat_id, status_text, parse_mode="HTML")
 
 # Callback Query Handler for Inline Keyboard Buttons
 @bot.callback_query_handler(func=lambda call: True)
@@ -802,7 +805,7 @@ def handle_menu_click(call):
             InlineKeyboardButton("Download & Send to Chat", callback_data="dl_mode_send"),
             InlineKeyboardButton("Archive on Server Only (Silent)", callback_data="dl_mode_silent")
         )
-        bot.send_message(chat_id, "Downloader: Select transfer mode:", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(chat_id, "Downloader: Select transfer mode:", reply_markup=markup, parse_mode="HTML")
     elif action == "dl_mode_send":
         USER_STATES[chat_id] = "awaiting_download"
         USER_PARAMS[chat_id] = {"silent": False}
@@ -821,7 +824,7 @@ def handle_menu_click(call):
             InlineKeyboardButton("Facebook", callback_data="add_plat_facebook"),
             InlineKeyboardButton("X / Twitter", callback_data="add_plat_x")
         )
-        bot.send_message(chat_id, "Add Profile: Select the platform:", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(chat_id, "Add Profile: Select the platform:", reply_markup=markup, parse_mode="HTML")
         
     # Batch Downloader Options
     elif action == "social_batch":
@@ -830,7 +833,7 @@ def handle_menu_click(call):
             InlineKeyboardButton("Run & Send Updates to Chat", callback_data="batch_mode_send"),
             InlineKeyboardButton("Silent Archive Only", callback_data="batch_mode_silent")
         )
-        bot.send_message(chat_id, "Batch Downloader: Select transfer mode:", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(chat_id, "Batch Downloader: Select transfer mode:", reply_markup=markup, parse_mode="HTML")
     elif action == "batch_mode_send":
         run_batch_download_logic(call.message, silent=False)
     elif action == "batch_mode_silent":
@@ -865,7 +868,7 @@ def run_status_command(message):
 def run_sherlock_command(message):
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "Usage: `/sherlock <username>`", parse_mode="Markdown")
+        bot.reply_to(message, "Usage: <code>/sherlock &lt;username&gt;</code>", parse_mode="HTML")
         return
     run_sherlock_logic(message, args[1].strip())
 
@@ -874,7 +877,7 @@ def run_sherlock_command(message):
 def run_holehe_command(message):
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "Usage: `/holehe <email>`", parse_mode="Markdown")
+        bot.reply_to(message, "Usage: <code>/holehe &lt;email&gt;</code>", parse_mode="HTML")
         return
     run_holehe_logic(message, args[1].strip())
 
@@ -883,7 +886,7 @@ def run_holehe_command(message):
 def run_toutatis_command(message):
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "Usage: `/toutatis <username>`", parse_mode="Markdown")
+        bot.reply_to(message, "Usage: <code>/toutatis &lt;username&gt;</code>", parse_mode="HTML")
         return
     run_toutatis_logic(message, args[1].strip())
 
@@ -892,7 +895,7 @@ def run_toutatis_command(message):
 def run_download_command(message):
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "Usage: `/download <url>`", parse_mode="Markdown")
+        bot.reply_to(message, "Usage: <code>/download &lt;url&gt;</code>", parse_mode="HTML")
         return
     run_download_logic(message, args[1].strip(), silent=False)
 
