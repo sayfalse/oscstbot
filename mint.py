@@ -802,6 +802,10 @@ def run_social_tool_tui():
 
 def update_single_tool(key, name, path):
     def run_pip_install():
+        pip_install = [sys.executable, "-m", "pip", "install"]
+        if sys.version_info >= (3, 11):
+            pip_install.append("--break-system-packages")
+
         req_file = os.path.join(path, "requirements.txt")
         setup_py = os.path.join(path, "setup.py")
         pyproject = os.path.join(path, "pyproject.toml")
@@ -818,9 +822,9 @@ def update_single_tool(key, name, path):
                             f.write(new_content)
                 except Exception as e:
                     print(Fore.RED + f"    [!] Warning: Failed to patch SpiderFoot requirements: {e}")
-            install_cmd = [sys.executable, "-m", "pip", "install", "-r", req_file]
+            install_cmd = pip_install + ["-r", req_file]
         elif os.path.exists(setup_py) or os.path.exists(pyproject):
-            install_cmd = [sys.executable, "-m", "pip", "install", "."]
+            install_cmd = pip_install + ["."]
             
         if install_cmd:
             print(Fore.LIGHTBLACK_EX + "    Upgrading dependencies...")

@@ -151,11 +151,15 @@ def main():
         setup_py = os.path.join(tool_path, "setup.py")
         pyproject = os.path.join(tool_path, "pyproject.toml")
         
+        pip_install = [sys.executable, "-m", "pip", "install"]
+        if sys.version_info >= (3, 11):
+            pip_install.append("--break-system-packages")
+        
         if os.path.exists(req_file):
             print(f"    ❯ Installing requirements for {key}...")
             try:
                 subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "-r", req_file],
+                    pip_install + ["-r", req_file],
                     check=True
                 )
                 print(f"    [+] Requirements installed successfully.")
@@ -165,7 +169,7 @@ def main():
             print(f"    ❯ Installing {key} package and dependencies...")
             try:
                 subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "."],
+                    pip_install + ["."],
                     cwd=tool_path,
                     check=True
                 )

@@ -11,13 +11,18 @@ if sys.platform.startswith('win'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-# 1. Auto-install colorama if not present
+# 1. Determine pip install command arguments (PEP 668 bypass for Python 3.11+)
+PIP_INSTALL = [sys.executable, "-m", "pip", "install"]
+if sys.version_info >= (3, 11):
+    PIP_INSTALL.append("--break-system-packages")
+
+# 1.1 Auto-install colorama if not present
 try:
     from colorama import init, Fore, Back, Style
 except ImportError:
     print("Installing setup prerequisites (colorama)...")
     try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "colorama"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(PIP_INSTALL + ["colorama"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         from colorama import init, Fore, Back, Style
     except Exception as e:
         print(f"Error installing colorama: {e}")
@@ -121,7 +126,7 @@ def install_engine_package(pkg_name):
     print(Fore.WHITE + f"  ❯ Installing {pkg_name} via pip...".ljust(55), end="", flush=True)
     try:
         process = subprocess.Popen(
-            [sys.executable, "-m", "pip", "install", "--upgrade", pkg_name],
+            PIP_INSTALL + ["--upgrade", pkg_name],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
@@ -213,9 +218,9 @@ def install_tool_from_github(key, info, target_dir, has_git):
                             f.write(new_content)
                 except Exception as e:
                     print(f"    [!] Warning: Failed to patch SpiderFoot requirements: {e}")
-            install_cmd = [sys.executable, "-m", "pip", "install", "-r", req_file]
+            install_cmd = PIP_INSTALL + ["-r", req_file]
         elif os.path.exists(setup_py) or os.path.exists(pyproject):
-            install_cmd = [sys.executable, "-m", "pip", "install", "."]
+            install_cmd = PIP_INSTALL + ["."]
             
         if install_cmd:
             process = subprocess.Popen(
