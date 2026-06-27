@@ -15,6 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     make \
     curl \
+    libxml2-dev \
+    libxslt1-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

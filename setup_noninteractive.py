@@ -148,6 +148,9 @@ def main():
                 
         # Install requirements
         req_file = os.path.join(tool_path, "requirements.txt")
+        setup_py = os.path.join(tool_path, "setup.py")
+        pyproject = os.path.join(tool_path, "pyproject.toml")
+        
         if os.path.exists(req_file):
             print(f"    ❯ Installing requirements for {key}...")
             try:
@@ -158,6 +161,17 @@ def main():
                 print(f"    [+] Requirements installed successfully.")
             except Exception as e:
                 print(f"    [!] Error installing requirements: {e}")
+        elif os.path.exists(setup_py) or os.path.exists(pyproject):
+            print(f"    ❯ Installing {key} package and dependencies...")
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "."],
+                    cwd=tool_path,
+                    check=True
+                )
+                print(f"    [+] Package installed successfully.")
+            except Exception as e:
+                print(f"    [!] Error installing package: {e}")
                 
         config_data[f"{key}_path"] = tool_path
 

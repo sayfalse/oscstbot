@@ -602,9 +602,11 @@ def run_download_logic(message, url, silent=False):
             if "401" in combined_err or "unauthorized" in combined_err.lower() or "login" in combined_err.lower():
                 err_reason = "Login required or blocked by the platform. Datacenter IP addresses require session cookies to bypass blocks."
             elif "429" in combined_err or "rate limit" in combined_err.lower() or "too many requests" in combined_err.lower():
-                err_reason = "Rate limited by the platform."
+                err_reason = "Rate limited by the platform. Datacenter IPs are heavily blocked/restricted; you must configure session cookies to run successfully."
             elif "private" in combined_err.lower():
                 err_reason = "This post/profile is private. Session cookies are required."
+            elif "not found" in combined_err.lower() or "404" in combined_err:
+                err_reason = "Content or user not found. Note that platforms like Instagram often return 404/not found to datacenter IPs unless session cookies are provided."
                 
             bot.edit_message_text(f"Error: Failed to download media. {err_reason}", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
             return
@@ -795,9 +797,11 @@ def run_batch_download_logic(message, silent=False):
                 if "401" in combined_err or "unauthorized" in combined_err.lower() or "login" in combined_err.lower():
                     err_msg = "Login required / Blocked by platform"
                 elif "429" in combined_err or "rate limit" in combined_err.lower() or "too many requests" in combined_err.lower():
-                    err_msg = "Rate limited by platform"
+                    err_msg = "Rate limited by platform (datacenter block)"
                 elif "private" in combined_err.lower():
                     err_msg = "Private profile"
+                elif "not found" in combined_err.lower() or "404" in combined_err:
+                    err_msg = "Not found (datacenter block / missing cookies)"
                 
                 if platform in ["instagram", "facebook"] and not cookie_path:
                     failed_profiles.append(f"{platform}/{username} ({err_msg} - try adding session cookies)")

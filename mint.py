@@ -801,27 +801,52 @@ def run_social_tool_tui():
                         break
 
 def update_single_tool(key, name, path):
+    def run_pip_install():
+        req_file = os.path.join(path, "requirements.txt")
+        setup_py = os.path.join(path, "setup.py")
+        pyproject = os.path.join(path, "pyproject.toml")
+        
+        install_cmd = None
+        if os.path.exists(req_file):
+            if key == "spiderfoot":
+                try:
+                    with open(req_file, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    new_content = re.sub(r'lxml\s*>=\s*4\.9\.2\s*,\s*<\s*5', 'lxml>=4.9.2', content)
+                    if new_content != content:
+                        with open(req_file, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                except Exception as e:
+                    print(Fore.RED + f"    [!] Warning: Failed to patch SpiderFoot requirements: {e}")
+            install_cmd = [sys.executable, "-m", "pip", "install", "-r", req_file]
+        elif os.path.exists(setup_py) or os.path.exists(pyproject):
+            install_cmd = [sys.executable, "-m", "pip", "install", "."]
+            
+        if install_cmd:
+            print(Fore.LIGHTBLACK_EX + "    Upgrading dependencies...")
+            process = subprocess.Popen(
+                install_cmd,
+                cwd=path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                print(Fore.RED + f"    [!] Error upgrading dependencies:\n{stderr.strip()}")
+                is_termux = "TERMUX_VERSION" in os.environ or "com.termux" in sys.executable
+                if is_termux and ("lxml" in stderr or "libxml2" in stderr or "libxslt" in stderr or "cherrypy" in stderr or "phonenumbers" in stderr):
+                    print(Fore.YELLOW + Style.BRIGHT + "\n    [!] Termux system dependency missing!")
+                    print(Fore.WHITE + f"        {name}'s dependencies require native compilers or libraries.")
+                    print(Fore.WHITE + "        Please open a new Termux window and run:")
+                    print(Fore.GREEN + Style.BRIGHT + "        pkg update && pkg install -y libxml2 libxslt clang make python-dev libcrypt-dev")
+                raise Exception("Dependency installation failed.")
+
     if os.path.exists(os.path.join(path, ".git")):
         try:
             print(Fore.LIGHTBLACK_EX + "    Running git pull...")
             subprocess.run(["git", "-C", path, "pull"], check=True)
-            
-            req_file = os.path.join(path, "requirements.txt")
-            if os.path.exists(req_file):
-                if key == "spiderfoot":
-                    try:
-                        with open(req_file, "r", encoding="utf-8") as f:
-                            content = f.read()
-                        new_content = re.sub(r'lxml\s*>=\s*4\.9\.2\s*,\s*<\s*5', 'lxml>=4.9.2', content)
-                        if new_content != content:
-                            with open(req_file, "w", encoding="utf-8") as f:
-                                f.write(new_content)
-                    except Exception as e:
-                        print(Fore.RED + f"    [!] Warning: Failed to patch SpiderFoot requirements: {e}")
-
-                print(Fore.LIGHTBLACK_EX + "    Upgrading dependencies...")
-                subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file], check=True)
-                
+            run_pip_install()
             print(Fore.GREEN + f"    [+] {name} updated successfully.")
         except Exception as e:
             print(Fore.RED + f"    [!] Error updating {name}: {e}")
@@ -878,20 +903,7 @@ def update_single_tool(key, name, path):
                 else:
                     shutil.copy2(s, d)
                     
-            req_file = os.path.join(path, "requirements.txt")
-            if os.path.exists(req_file):
-                if key == "spiderfoot":
-                    try:
-                        with open(req_file, "r", encoding="utf-8") as f:
-                            content = f.read()
-                        new_content = re.sub(r'lxml\s*>=\s*4\.9\.2\s*,\s*<\s*5', 'lxml>=4.9.2', content)
-                        if new_content != content:
-                            with open(req_file, "w", encoding="utf-8") as f:
-                                f.write(new_content)
-                    except Exception as e:
-                        print(Fore.RED + f"    [!] Warning: Failed to patch SpiderFoot requirements: {e}")
-                subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file], check=True)
-                
+            run_pip_install()
             print(Fore.GREEN + f"    [+] {name} re-downloaded and updated successfully.")
         else:
             print(Fore.RED + f"    [!] Could not locate extracted files in zip.")

@@ -196,8 +196,12 @@ def install_tool_from_github(key, info, target_dir, has_git):
                     if os.path.exists(temp_extract_dir):
                         shutil.rmtree(temp_extract_dir)
                         
-        # 2. Install requirements
+        # 2. Install requirements or setup package
         req_file = os.path.join(tool_path, "requirements.txt")
+        setup_py = os.path.join(tool_path, "setup.py")
+        pyproject = os.path.join(tool_path, "pyproject.toml")
+        
+        install_cmd = None
         if os.path.exists(req_file):
             if key == "spiderfoot":
                 try:
@@ -209,14 +213,32 @@ def install_tool_from_github(key, info, target_dir, has_git):
                             f.write(new_content)
                 except Exception as e:
                     print(f"    [!] Warning: Failed to patch SpiderFoot requirements: {e}")
-
+            install_cmd = [sys.executable, "-m", "pip", "install", "-r", req_file]
+        elif os.path.exists(setup_py) or os.path.exists(pyproject):
+            install_cmd = [sys.executable, "-m", "pip", "install", "."]
+            
+        if install_cmd:
             process = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install", "-r", req_file],
+                install_cmd,
+                cwd=tool_path,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            process.communicate()
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                print(Fore.RED + Style.BRIGHT + "[ FAILED  ]")
+                print(Fore.RED + f"    Error details:\n{stderr.strip()}")
+                
+                # Check for Termux system dependency errors
+                is_termux = "TERMUX_VERSION" in os.environ or "com.termux" in sys.executable
+                if is_termux and ("lxml" in stderr or "libxml2" in stderr or "libxslt" in stderr or "cherrypy" in stderr or "phonenumbers" in stderr):
+                    print(Fore.YELLOW + Style.BRIGHT + "\n  [!] Termux system dependency missing!")
+                    print(Fore.WHITE + f"  [+] {display_name}'s dependencies require compilers or native libraries to build.")
+                    print(Fore.WHITE + "  [+] Please open a new Termux window and run:")
+                    print(Fore.GREEN + Style.BRIGHT + "      pkg update && pkg install -y libxml2 libxslt clang make python-dev libcrypt-dev")
+                    print(Fore.WHITE + "  [+] Then, re-run this setup script.")
+                return False, None
             
         print(Fore.GREEN + Style.BRIGHT + "[ SUCCESS ]")
         return True, tool_path
